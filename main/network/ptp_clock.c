@@ -70,7 +70,20 @@ static struct {
   // Statistics
   uint32_t sync_count;
   uint32_t followup_count;
+
+  // Master clock filter (0 = accept any master)
+  uint64_t expected_clock_id;
 } ptp = {0};
+
+// Parse 8-byte clockIdentity (big-endian) from PTP sourcePortIdentity
+// (header bytes 20-27).
+static uint64_t parse_ptp_clock_id(const uint8_t *data) {
+  uint64_t id = 0;
+  for (int i = 0; i < 8; i++) {
+    id = (id << 8) | data[20 + i];
+  }
+  return id;
+}
 
 // Parse 48-bit seconds + 32-bit nanoseconds from PTP timestamp
 static uint64_t parse_ptp_timestamp_ns(const uint8_t *data) {
@@ -233,6 +246,17 @@ static void process_ptp_message(const uint8_t *data, size_t len,
 
   uint8_t msg_type = data[0] & 0x0F;
   uint16_t seq = ((uint16_t)data[30] << 8) | data[31];
+
+  // If a master filter is set, reject messages from other clocks.
+  // This applies only to messages that contribute to offset estimation
+  // (SYNC / FOLLOW_UP); ANNOUNCE and others are ignored anyway.
+  if (ptp.expected_clock_id != 0 &&
+      (msg_type == PTP_MSG_SYNC || msg_type == PTP_MSG_FOLLOW_UP)) {
+    uint64_t src_clock_id = parse_ptp_clock_id(data);
+    if (src_clock_id != ptp.expected_clock_id) {
+      return;
+    }
+  }
 
   switch (msg_type) {
   case PTP_MSG_SYNC:
@@ -457,6 +481,10 @@ void ptp_clock_clear(void) {
 
   ptp.sync_count = 0;
   ptp.followup_count = 0;
+
+  // Drop the master filter so the next session can lock to whatever master
+  // its anchor packet names (which may differ from the previous session).
+  ptp.expected_clock_id = 0;
 }
 
 bool ptp_clock_is_locked(void) {
@@ -479,6 +507,30 @@ uint64_t ptp_clock_get_time_ns(void) {
 
 int64_t ptp_clock_get_offset_ns(void) {
   return ptp.filtered_offset_ns;
+}
+
+void ptp_clock_set_master_clock_id(uint64_t clock_id) {
+  if (clock_id == ptp.expected_clock_id) {
+    return;
+  }
+
+  ESP_LOGI(TAG, "PTP master clock_id %s: %016llx",
+           clock_id ? "set" : "cleared", (unsigned long long)clock_id);
+  ptp.expected_clock_id = clock_id;
+
+  // Drop accumulated samples / lock state — they may have come from a
+  // different (wrong) master.
+  ptp.locked = false;
+  ptp.lock_start_ms = 0;
+  ptp.lock_candidate_start_ms = 0;
+  ptp.filtered_offset_ns = 0;
+  ptp.sample_index = 0;
+  ptp.sample_fill = 0;
+  ptp.awaiting_followup = false;
+}
+
+uint64_t ptp_clock_get_master_clock_id(void) {
+  return ptp.expected_clock_id;
 }
 
 void ptp_clock_get_stats(ptp_stats_t *stats) {

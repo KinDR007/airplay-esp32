@@ -244,6 +244,16 @@ void audio_receiver_set_anchor_time(uint64_t clock_id, uint64_t network_time_ns,
              (unsigned long)rtp_time, (unsigned long)(rtp_time + gate_window));
   }
 
+  // Pin the PTP clock to the master announced by the anchor packet's
+  // clock_id field.  Without this, ptp_clock can lock to any PTP master
+  // on the LAN (HomePods, AppleTVs, NTP-PTP gateways) and produce offsets
+  // that have nothing to do with the AirPlay sender's clock domain.
+  // clock_id == 0 happens on the AirPlay 1 NTP path; in that case leave
+  // the filter as-is (set or cleared by a prior 0xD7 anchor / TEARDOWN).
+  if (clock_id != 0) {
+    ptp_clock_set_master_clock_id(clock_id);
+  }
+
   audio_timing_set_anchor(&receiver.timing, &receiver.stream->format, clock_id,
                           network_time_ns, rtp_time);
 }
