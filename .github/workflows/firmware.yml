@@ -1,0 +1,97 @@
+name: Firmware
+
+# Builds every PlatformIO environment (firmware + SPIFFS filesystem) and
+# publishes the flashable binaries:
+#   - as downloadable workflow artifacts on every push / PR / manual run
+#   - attached to the GitHub Release when a tag like v1.2.3 is pushed
+#
+# Each env produces a merged <env>-factory.bin (flash at 0x0, app + filesystem)
+# plus the individual partitions and a FLASH.md with esptool commands.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # needed to attach assets to the release on tag builds
+
+concurrency:
+  group: firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env:
+          - squeezeamp
+          - squeezeamp-bt
+          - squeezeamp-4m
+          - esp32s3
+          - esp32s3-jtag
+          - xiao-s3
+          - esp32wrover-dev
+          - esparagus-audio-brick
+          - esparagus-audio-brick-bt
+          - esparagus-audio-brick-s3
+          - esparagus-louder
+          - esparagus-louder-bt
+          - esparagus-louder-s3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive # u8g2 is a submodule
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO + pip
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('platformio.ini', 'dependencies.lock') }}
+          restore-keys: |
+            pio-${{ runner.os }}-${{ matrix.env }}-
+            pio-${{ runner.os }}-
+
+      - name: Install PlatformIO + esptool
+        run: |
+          python -m pip install --upgrade pip
+          pip install platformio "esptool~=4.8"
+
+      - name: Build firmware
+        run: pio run -e ${{ matrix.env }}
+
+      - name: Build filesystem (SPIFFS)
+        run: pio run -e ${{ matrix.env }} -t buildfs
+
+      - name: Package binaries
+        run: python tools/ci/package_firmware.py ${{ matrix.env }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.env }}
+          path: dist/${{ matrix.env }}/**
+          if-no-files-found: error
+
+      - name: Zip for release
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          cd dist
+          zip -r "../firmware-${{ matrix.env }}.zip" "${{ matrix.env }}"
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: firmware-${{ matrix.env }}.zip
+          fail_on_unmatched_files: true

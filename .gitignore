@@ -15,3 +15,6 @@ user_platformio.ini
 # macOS metadata
 .DS_Store
 **/.DS_Store
+
+# CI packaging output
+dist/
