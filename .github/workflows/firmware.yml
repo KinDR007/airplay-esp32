@@ -29,17 +29,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Only envs that build cleanly from a fresh checkout are listed. The
-        # Spotify-enabled envs (esp32s3, esp32s3-jtag, esp32wrover-dev,
-        # squeezeamp-4m, esparagus-*) currently fail in CI: cspot generates
-        # protobuf/*.pb.h via nanopb at build time, but on a clean parallel
-        # build spotify_connect.cpp is compiled before those headers exist, so
-        # the build dies with "protobuf/mercury.pb.h: No such file". Re-add them
-        # here once the cspot proto-generation ordering is fixed.
         env:
-          - xiao-s3
           - squeezeamp
           - squeezeamp-bt
+          - squeezeamp-4m
+          - esp32s3
+          - esp32s3-jtag
+          - xiao-s3
+          - esp32wrover-dev
+          - esparagus-audio-brick
+          - esparagus-audio-brick-bt
+          - esparagus-audio-brick-s3
+          - esparagus-louder
+          - esparagus-louder-bt
+          - esparagus-louder-s3
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,13 +63,27 @@ jobs:
             pio-${{ runner.os }}-${{ matrix.env }}-
             pio-${{ runner.os }}-
 
-      - name: Install PlatformIO + esptool
+      - name: Install PlatformIO + esptool + protoc
         run: |
           python -m pip install --upgrade pip
           pip install platformio "esptool~=4.8"
+          # protoc must exist at CMake configure time for cspot's nanopb setup.
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Build firmware
-        run: pio run -e ${{ matrix.env }}
+        # cspot (Spotify) generates protobuf/*.pb.h with nanopb, whose generator
+        # runs under PlatformIO's espidf venv python and needs `protobuf` +
+        # `pkg_resources` (the latter still ships in setuptools<81). A fresh
+        # venv has neither. First pass bootstraps the venv (fails at proto-gen
+        # for Spotify envs); we then inject the deps and build for real. For
+        # non-Spotify envs the first pass already succeeds and the second is a
+        # no-op.
+        run: |
+          pio run -e ${{ matrix.env }} || true
+          for py in "$HOME"/.platformio/penv/.espidf-*/bin/python; do
+            [ -x "$py" ] && "$py" -m pip install -U "protobuf" "setuptools<81" || true
+          done
+          pio run -e ${{ matrix.env }}
 
       - name: Build filesystem (SPIFFS)
         run: pio run -e ${{ matrix.env }} -t buildfs

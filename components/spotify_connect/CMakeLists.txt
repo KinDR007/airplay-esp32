@@ -36,6 +36,20 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
 # add_definitions for this component on xtensa. Inject via CMAKE_CXX_FLAGS.
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DBELL_ONLY_CJSON -DBELL_DISABLE_FMT -DPB_ENABLE_MALLOC -DPB_FIELD_32BIT" PARENT_SCOPE)
 
+# The PARENT_SCOPE set above leaks to the parent scope but does NOT apply to our
+# own spotify_connect.cpp. Apply the bell/cspot build defines as real compile
+# DEFINITIONS (not COMPILE_FLAGS) — IDF's header-dependency scan step reads
+# DEFINES but not FLAGS, so a define in FLAGS is invisible to it and the scan
+# still tries to open fmt/core.h. target_compile_definitions lands in DEFINES.
+# Notably BELL_DISABLE_FMT gates fmt/core.h, which we don't ship.
+target_compile_definitions(${COMPONENT_LIB} PRIVATE
+    BELL_ONLY_CJSON
+    BELL_DISABLE_FMT
+    BELL_DISABLE_CODECS
+    BELL_DISABLE_REGEX
+    PB_ENABLE_MALLOC
+    PB_FIELD_32BIT)
+
 # Hardwire cspot + ESP-IDF include paths in case INTERFACE propagation via
 # REQUIRES doesn't carry them (observed on xtensa-esp-elf + S3 toolchain).
 target_include_directories(${COMPONENT_LIB} PRIVATE
@@ -43,12 +57,33 @@ target_include_directories(${COMPONENT_LIB} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../cspot/cspot_lib/bell/main/utilities/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/../cspot/cspot_lib/bell/main/io/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/../cspot/cspot_lib/bell/main/platform"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../cspot/cspot_lib/bell/main/audio-codec/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../cspot/cspot_lib/bell/main/audio-dsp/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../cspot/cspot_lib/bell/main/audio-sinks/include"
     "${CMAKE_BINARY_DIR}/esp-idf/cspot/cspot_lib"
+    "${CMAKE_BINARY_DIR}/esp-idf/cspot/cspot_lib/bell"
     "${CMAKE_CURRENT_SOURCE_DIR}/../cspot/cspot_lib/bell/external/nanopb"
-    "$ENV{IDF_PATH}/components/pthread/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../cspot/cspot_lib/bell/external/tremor"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../cspot/cspot_lib/bell/external/nlohmann_json/include"
     "$ENV{IDF_PATH}/components/mbedtls/mbedtls/include"
     "$ENV{IDF_PATH}/components/mbedtls/port/include"
+    "$ENV{IDF_PATH}/components/json/cJSON"
+    "$ENV{IDF_PATH}/components/http_parser"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../managed_components/espressif__mdns/include"
 )
+
+# IDF REQUIRES include propagation is incomplete for this component on the PIO
+# espidf platform — transitive dirs (esp_partition, spi_flash, esp_system, …)
+# pulled in by cspot's deep header chains get dropped. Add the full set of IDF
+# component include dirs in one shot rather than chasing them one by one. Broad
+# but version-resilient; non-standard layouts (cJSON, http_parser, mbedtls) are
+# listed explicitly above.
+file(GLOB _idf_component_includes LIST_DIRECTORIES true
+     "$ENV{IDF_PATH}/components/*/include")
+# Drop host-only ports (e.g. components/linux) whose headers (sys/cdefs.h →
+# bsd/sys/cdefs.h) shadow the real toolchain ones and break the target build.
+list(FILTER _idf_component_includes EXCLUDE REGEX "/components/linux/")
+target_include_directories(${COMPONENT_LIB} PRIVATE ${_idf_component_includes})
 
 # Wait for cspot's generated protobuf headers before compiling our .cpp.
 # generate_proto_sources is a custom target defined in cspot_lib/CMakeLists.txt
