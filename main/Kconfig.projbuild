@@ -397,4 +397,62 @@ menu "Airplay ESP Configuration"
                 GPIO pin for the previous track button (active-low, internal pull-up).
                 Set to -1 to disable.
     endmenu
+
+    menu "Spotify Connect"
+        config SPOTIFY_CONNECT_ENABLE
+            bool "Enable Spotify Connect receiver (cspot)"
+            default y
+            help
+                Enables the Spotify Connect receiver based on the cspot
+                library (vendored from squeezelite-esp32). The device appears
+                in the Spotify app's device list via _spotify-connect._tcp
+                mDNS service. Coexists with AirPlay: whichever client takes
+                over wins exclusive use of the audio output.
+
+                Requires Wi-Fi and increases binary size by ~500 KB. Best
+                used on ESP32-S3 or ESP32-P4 with PSRAM.
+
+        config SPOTIFY_CONNECT_BITRATE
+            int "Default audio bitrate (kbps)"
+            depends on SPOTIFY_CONNECT_ENABLE
+            default 160
+            range 96 320
+            help
+                96, 160 or 320 kbps. 320 needs PSRAM and uses ~50% more CPU.
+    endmenu
+
+    menu "DLNA / UPnP MediaRenderer"
+        config DLNA_RENDERER_ENABLE
+            bool "Enable DLNA / UPnP MediaRenderer (Android cast)"
+            default n
+            help
+                Adds a UPnP MediaRenderer:1 device that accepts "Cast to
+                device" / "Play to" requests from Android, BubbleUPnP,
+                Plex/Plexamp, foobar2000 mobile, VLC, Synology DS Audio, etc.
+
+                Implements SSDP discovery, AVTransport, ConnectionManager,
+                and audio playback (MP3/AAC/FLAC/OGG/Opus/PCM via
+                esp_audio_codec). Adds ~80 KB flash and one background task
+                (~5 KB stack).
+
+                When this is enabled the receiver advertises itself via
+                _dlna._tcp and on the SSDP multicast group on Wi-Fi.
+    endmenu
+
+    menu "Now-Playing Web UI"
+        config NOWPLAYING_UI_ENABLE
+            bool "Enable /nowplaying web page + REST API + artwork cache"
+            default n
+            help
+                When enabled, hosts the /nowplaying HTML page and
+                /api/nowplaying* REST endpoints (JSON status + artwork).
+                Also allocates a 256 KB PSRAM buffer for the album artwork.
+
+                Disable to save flash (~30 KB), PSRAM (256 KB), and a small
+                amount of RAM. The metadata pipeline (RTSP_EVENT_METADATA →
+                serial "now_playing" log) keeps working either way.
+
+                Disabled by default on classic ESP32 (tight on flash/RAM
+                when paired with A2DP + AirPlay + Spotify).
+    endmenu
 endmenu

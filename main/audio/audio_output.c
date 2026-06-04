@@ -45,13 +45,63 @@ static TaskHandle_t playback_task_handle = NULL;
 static volatile int source_rate = 44100;
 static volatile bool resample_reinit_needed = false;
 
-static void apply_volume(int16_t *buf, size_t n) {
-#ifndef CONFIG_DAC_CONTROLS_VOLUME
-  int32_t vol = airplay_get_volume_q15();
-  for (size_t i = 0; i < n; i++) {
-    buf[i] = (int16_t)(((int32_t)buf[i] * vol) >> 15);
+// ---- Smooth connect/disconnect fade --------------------------------------
+// A Q15 gain (0..32768) multiplied on top of the normal volume. Output starts
+// muted and fades in when audio begins after a (re)connect, and is ramped back
+// down to zero before audio is cut on disconnect — so transitions aren't an
+// abrupt jump. The gain steps once per stereo frame inside apply_volume().
+#define FADE_IN_MS  500
+#define FADE_OUT_MS 180
+static volatile int32_t s_fade_gain   = 0;     // current gain, stepped per frame
+static volatile int32_t s_fade_target = 0;     // 0 = silent, 32768 = unity
+static volatile int32_t s_fade_step   = 0;     // Q15 delta per stereo frame
+static volatile bool s_fade_in_pending = true; // fade in when audio next resumes
+
+static void fade_to(int32_t target, uint32_t ms) {
+  uint32_t frames = (ms * (uint32_t)OUTPUT_RATE) / 1000u;
+  if (frames == 0) frames = 1;
+  int32_t delta = target - s_fade_gain;
+  int32_t step = delta / (int32_t)frames;
+  if (step == 0) step = (delta >= 0) ? 1 : -1;
+  s_fade_step = step;
+  s_fade_target = target;
+}
+
+void audio_output_fade_in(uint32_t ms) { fade_to(32768, ms ? ms : 1); }
+void audio_output_fade_out(uint32_t ms) { fade_to(0, ms ? ms : 1); }
+
+void audio_output_fade_out_wait(uint32_t ms) {
+  audio_output_fade_out(ms);
+  // Block until the playback task has rendered the ramp down (or give up, e.g.
+  // if the buffer ran dry / playback isn't running). Caller then stops audio.
+  uint32_t waited = 0, budget = ms + 80;
+  while (s_fade_gain > 0 && waited < budget) {
+    vTaskDelay(pdMS_TO_TICKS(5));
+    waited += 5;
   }
+}
+
+static void apply_volume(int16_t *buf, size_t n) {
+#ifdef CONFIG_DAC_CONTROLS_VOLUME
+  int32_t vol = 32768; // DAC handles volume in hardware; fade still applies
+#else
+  int32_t vol = airplay_get_volume_q15();
 #endif
+  int32_t g = s_fade_gain;
+  const int32_t target = s_fade_target;
+  const int32_t step = s_fade_step;
+  // Fast path: unity volume, fully faded in — nothing to scale.
+  if (vol >= 32768 && g >= 32768 && target >= 32768) return;
+  for (size_t i = 0; i + 1 < n; i += 2) {
+    if (g != target) {
+      g += step;
+      if ((step > 0 && g > target) || (step < 0 && g < target)) g = target;
+    }
+    int32_t eff = (vol * g) >> 15; // combined Q15 gain
+    buf[i] = (int16_t)(((int32_t)buf[i] * eff) >> 15);
+    buf[i + 1] = (int16_t)(((int32_t)buf[i + 1] * eff) >> 15);
+  }
+  s_fade_gain = g;
 }
 
 static void playback_task(void *arg) {
@@ -77,11 +127,23 @@ static void playback_task(void *arg) {
     if (flush_requested) {
       flush_requested = false;
       audio_resample_reset();
-      i2s_channel_disable(tx_handle);
-      i2s_channel_enable(tx_handle);
+      // NOTE: deliberately do NOT disable/enable the I2S channel here. Cycling
+      // it stops BCK, and the PCM5102A (BCK-only mode, SCK=GND) re-locks its
+      // internal PLL with an audible pop. Keeping the channel running — the
+      // task writes silence between streams — keeps the DAC clocked and quiet.
+      // Stale DMA audio is harmless: callers ramp the gain down before flushing
+      // (declick), so whatever is left in the DMA is already near-silent.
+      // Mute and arm a fade-in so audio resuming after the flush ramps up.
+      s_fade_gain = 0;
+      s_fade_target = 0;
+      s_fade_in_pending = true;
     }
     size_t samples = audio_receiver_read(pcm, FRAME_SAMPLES + 1);
     if (samples > 0) {
+      if (s_fade_in_pending) {
+        s_fade_in_pending = false;
+        audio_output_fade_in(FADE_IN_MS);
+      }
       int16_t *play_buf = pcm;
       size_t play_samples = samples;
       if (audio_resample_is_active()) {

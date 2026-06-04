@@ -1297,3 +1297,130 @@ bool bplist_find_stream_crypto(const uint8_t *plist, size_t plist_len,
 
   return found;
 }
+
+// ---------------------------------------------------------------------------
+// Generic deep search — walk dicts/arrays recursively, call leaf reader on
+// matching key. Used for MediaRemote NowPlayingInfo extraction from /command.
+
+typedef enum { LEAF_STRING, LEAF_REAL } leaf_kind_t;
+typedef struct {
+  leaf_kind_t kind;
+  char *str_out;
+  size_t str_cap;
+  double *real_out;
+} leaf_ctx_t;
+
+static bool bplist_read_leaf(const uint8_t *plist, size_t plist_len,
+                             uint64_t val_offset, leaf_ctx_t *ctx) {
+  if (ctx->kind == LEAF_STRING) {
+    return bplist_read_string(plist, plist_len, val_offset, ctx->str_out,
+                              ctx->str_cap);
+  }
+  if (ctx->kind == LEAF_REAL) {
+    if (bplist_read_real(plist, plist_len, val_offset, ctx->real_out))
+      return true;
+    int64_t iv = 0;
+    if (bplist_read_int(plist, plist_len, val_offset, &iv)) {
+      *ctx->real_out = (double)iv;
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool bplist_find_leaf_recursive(const uint8_t *plist, size_t plist_len,
+                                       uint64_t obj_idx,
+                                       uint64_t offset_table_offset,
+                                       uint8_t offset_size, uint8_t ref_size,
+                                       const char *key, leaf_ctx_t *ctx,
+                                       int depth) {
+  if (depth > 10) return false;
+
+  uint64_t offset =
+      bplist_get_offset(plist, offset_table_offset, offset_size, obj_idx);
+  if (offset >= plist_len) return false;
+
+  uint8_t marker = plist[offset];
+  uint8_t type = marker & 0xF0;
+
+  if (type == BPLIST_DICT) {
+    size_t dict_size = 0, header_len = 0;
+    if (!bplist_parse_count(plist, plist_len, offset, &dict_size, &header_len))
+      return false;
+    size_t pos = offset + header_len;
+    if (pos + dict_size * 2 * ref_size > plist_len) return false;
+    const uint8_t *key_refs = plist + pos;
+    const uint8_t *val_refs = plist + pos + dict_size * ref_size;
+
+    for (size_t i = 0; i < dict_size; i++) {
+      uint64_t key_idx = read_be_int(key_refs + i * ref_size, ref_size);
+      uint64_t key_offset =
+          bplist_get_offset(plist, offset_table_offset, offset_size, key_idx);
+      char found_key[96];
+      if (bplist_read_string(plist, plist_len, key_offset, found_key,
+                             sizeof(found_key))) {
+        if (strcmp(found_key, key) == 0) {
+          uint64_t val_idx = read_be_int(val_refs + i * ref_size, ref_size);
+          uint64_t val_offset = bplist_get_offset(plist, offset_table_offset,
+                                                  offset_size, val_idx);
+          if (bplist_read_leaf(plist, plist_len, val_offset, ctx)) return true;
+          // fall through — same key may appear deeper with proper value
+        }
+      }
+    }
+    for (size_t i = 0; i < dict_size; i++) {
+      uint64_t val_idx = read_be_int(val_refs + i * ref_size, ref_size);
+      if (bplist_find_leaf_recursive(plist, plist_len, val_idx,
+                                     offset_table_offset, offset_size, ref_size,
+                                     key, ctx, depth + 1))
+        return true;
+    }
+  } else if (type == BPLIST_ARRAY || type == BPLIST_SET) {
+    size_t count = 0, header_len = 0;
+    if (!bplist_parse_count(plist, plist_len, offset, &count, &header_len))
+      return false;
+    size_t pos = offset + header_len;
+    if (pos + count * ref_size > plist_len) return false;
+    for (size_t i = 0; i < count; i++) {
+      uint64_t idx = read_be_int(plist + pos + i * ref_size, ref_size);
+      if (bplist_find_leaf_recursive(plist, plist_len, idx, offset_table_offset,
+                                     offset_size, ref_size, key, ctx,
+                                     depth + 1))
+        return true;
+    }
+  }
+  return false;
+}
+
+bool bplist_find_string_deep(const uint8_t *plist, size_t plist_len,
+                             const char *key, char *out_str,
+                             size_t out_capacity) {
+  if (plist_len < 40 || memcmp(plist, "bplist00", 8) != 0) return false;
+  uint8_t offset_size = 0, ref_size = 0;
+  uint64_t num_objects = 0, top_object = 0, offset_table_offset = 0;
+  if (!bplist_parse_trailer(plist, plist_len, &offset_size, &ref_size,
+                            &num_objects, &top_object, &offset_table_offset))
+    return false;
+  (void)num_objects;
+  leaf_ctx_t ctx = {.kind = LEAF_STRING, .str_out = out_str,
+                    .str_cap = out_capacity, .real_out = NULL};
+  return bplist_find_leaf_recursive(plist, plist_len, top_object,
+                                    offset_table_offset, offset_size, ref_size,
+                                    key, &ctx, 0);
+}
+
+bool bplist_find_real_deep(const uint8_t *plist, size_t plist_len,
+                           const char *key, double *out_value) {
+  if (plist_len < 40 || memcmp(plist, "bplist00", 8) != 0) return false;
+  uint8_t offset_size = 0, ref_size = 0;
+  uint64_t num_objects = 0, top_object = 0, offset_table_offset = 0;
+  if (!bplist_parse_trailer(plist, plist_len, &offset_size, &ref_size,
+                            &num_objects, &top_object, &offset_table_offset))
+    return false;
+  (void)num_objects;
+  leaf_ctx_t ctx = {.kind = LEAF_REAL, .str_out = NULL, .str_cap = 0,
+                    .real_out = out_value};
+  return bplist_find_leaf_recursive(plist, plist_len, top_object,
+                                    offset_table_offset, offset_size, ref_size,
+                                    key, &ctx, 0);
+}

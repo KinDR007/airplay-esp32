@@ -239,6 +239,18 @@ bool bplist_find_real(const uint8_t *plist, size_t plist_len, const char *key,
 bool bplist_find_string(const uint8_t *plist, size_t plist_len, const char *key,
                         char *out_str, size_t out_capacity);
 
+/**
+ * Like bplist_find_string but walks nested dicts/arrays recursively.
+ * Useful for keys buried inside MediaRemote NowPlayingInfo payloads.
+ */
+bool bplist_find_string_deep(const uint8_t *plist, size_t plist_len,
+                             const char *key, char *out_str,
+                             size_t out_capacity);
+
+/** Deep variant of bplist_find_real (recurses into nested containers). */
+bool bplist_find_real_deep(const uint8_t *plist, size_t plist_len,
+                           const char *key, double *out_value);
+
 // ========================================
 // Binary plist builders (for AirPlay SETUP responses)
 // ========================================

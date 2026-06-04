@@ -12,16 +12,24 @@
  */
 
 // Key bits:
+//   Bit 15: AudioMetaCovers   — iPhone sends artwork via SET_PARAMETER image/*
+//   Bit 16: AudioMetaProgress — iPhone sends "progress: a/b/c" text/parameters
+//   Bit 17: AudioMetaTxtDAAP  — iPhone sends DMAP-tagged artist/album/title
+//   Bit 29: plistMetaData     — enables bplist event/command channel
 //   Bit 38: SupportsCoreUtilsPairingAndEncryption
 //   Bit 46: SupportsHKPairingAndAccessControl
 //   Bit 48: SupportsTransientPairing
+//   Bit 50: NowPlayingInfo    — MediaRemote NowPlaying via POST /command bplist
 #ifdef CONFIG_AIRPLAY_FORCE_V1
-// AirPlay v1: strip pairing/encryption bits so iOS uses classic RAOP
+// AirPlay v1: strip pairing/encryption bits so iOS uses classic RAOP.
+// Keep metadata bits 15/16/17 — iTunes/Music will send DMAP via SET_PARAMETER.
 #define AIRPLAY_FEATURES_HI 0x0
-#define AIRPLAY_FEATURES_LO 0x5C4A00
+#define AIRPLAY_FEATURES_LO 0x5FCA00
 #else
-#define AIRPLAY_FEATURES_HI 0x1C340
-#define AIRPLAY_FEATURES_LO 0x405C4A00
+// Add bits 15/16/17 (LO 0x38000) and 29 (LO 0x20000000) for metadata in LO,
+// and bit 50 (HI bit 18 = 0x40000) for MediaRemote NowPlaying in HI.
+#define AIRPLAY_FEATURES_HI 0x5C340
+#define AIRPLAY_FEATURES_LO 0x607CCA00
 #endif
 
 // Audio buffer size for buffered streams (type 103)

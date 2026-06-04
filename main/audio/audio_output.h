@@ -48,3 +48,22 @@ void audio_output_set_sample_rate(uint32_t rate);
  * The resampler is re-initialized if the rate changes.
  */
 void audio_output_set_source_rate(int rate);
+
+/**
+ * Smoothly ramp the output gain up to full over @p ms milliseconds.
+ * Normally triggered automatically when audio resumes after a flush.
+ */
+void audio_output_fade_in(uint32_t ms);
+
+/**
+ * Smoothly ramp the output gain down to zero over @p ms milliseconds
+ * (non-blocking).
+ */
+void audio_output_fade_out(uint32_t ms);
+
+/**
+ * Ramp the output gain down to zero and block until the fade has been
+ * rendered (or a short timeout elapses). Call this right before stopping
+ * audio on disconnect so the cut isn't abrupt.
+ */
+void audio_output_fade_out_wait(uint32_t ms);

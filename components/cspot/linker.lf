@@ -1,0 +1,9 @@
+[mapping:cspot]
+archive: libcspot.a
+entries:
+    * (extram_bss)
+
+[mapping:bell]
+archive: libbell.a
+entries:
+    * (extram_bss)

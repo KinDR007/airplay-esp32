@@ -4,6 +4,10 @@ CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 CONFIG_SPIRAM_MODE_OCT=y
 
+# cspot (Spotify Connect) needs C++ exceptions on every target it compiles on.
+CONFIG_COMPILER_CXX_EXCEPTIONS=y
+CONFIG_COMPILER_CXX_EXCEPTIONS_EMG_POOL_SIZE=0
+
 # USB Audio Class defaults for the current usb_device_uac integration.
 # Keep both streams stereo at 48 kHz so the UAC descriptors, feedback,
 # and AirPlay USB backend all use the same resampled output rate.

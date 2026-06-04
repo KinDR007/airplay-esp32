@@ -59,6 +59,10 @@ if(CONFIG_BT_A2DP_ENABLE)
     list(APPEND SRC_FILES "audio/a2dp_sink.c")
 endif()
 
+if(CONFIG_NOWPLAYING_UI_ENABLE)
+    list(APPEND SRC_FILES "now_playing_store.c")
+endif()
+
 # W5500 SPI Ethernet
 if(CONFIG_ETH_W5500_ENABLED)
     list(APPEND SRC_FILES "network/ethernet.c")
@@ -95,6 +99,8 @@ set( DEPS
     audio-resampler
     esp_eth
     spiffs_storage
+    spotify_connect
+    dlna_renderer
 )
 
 # TODO: why these fall over in CI and fine locally...

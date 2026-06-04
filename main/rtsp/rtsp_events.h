@@ -31,6 +31,9 @@ typedef struct {
   char genre[METADATA_STRING_MAX];  // Genre (DMAP asgn)
   uint32_t duration_secs;           // Total track duration in seconds
   uint32_t position_secs;           // Current playback position in seconds
+  bool position_valid;              // true if position_secs was actually
+                                    // present in the source message (vs. 0
+                                    // because the field was missing)
   bool has_artwork;                 // Whether artwork is available
 } rtsp_metadata_t;
 

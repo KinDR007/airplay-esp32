@@ -19,9 +19,21 @@
 #include "wifi.h"
 #include "spiffs_storage.h"
 
+#include "rtsp_events.h"
+#ifdef CONFIG_NOWPLAYING_UI_ENABLE
+#include "now_playing_store.h"
+#endif
+
 #ifdef CONFIG_BT_A2DP_ENABLE
 #include "a2dp_sink.h"
-#include "rtsp_events.h"
+#endif
+
+#ifdef CONFIG_SPOTIFY_CONNECT_ENABLE
+#include "spotify_connect.h"
+#endif
+
+#ifdef CONFIG_DLNA_RENDERER_ENABLE
+#include "dlna_renderer.h"
 #endif
 
 #include "iot_board.h"
@@ -57,6 +69,41 @@ static void start_airplay_services(void) {
     ESP_ERROR_CHECK(audio_receiver_init());
     ESP_ERROR_CHECK(audio_output_init());
     mdns_airplay_init();
+#ifdef CONFIG_DLNA_RENDERER_ENABLE
+    {
+      char dlna_name[65];
+      settings_get_device_name(dlna_name, sizeof(dlna_name));
+      httpd_handle_t srv = web_server_get_handle();
+      uint16_t port = web_server_get_port();
+      if (srv) {
+        esp_err_t e = dlna_renderer_init(srv, port, dlna_name);
+        if (e != ESP_OK)
+          ESP_LOGW(TAG, "DLNA renderer init failed: %s", esp_err_to_name(e));
+        else
+          ESP_LOGI(TAG, "DLNA renderer ready");
+      }
+    }
+#endif
+#ifdef CONFIG_SPOTIFY_CONNECT_ENABLE
+    {
+      ESP_LOGI(TAG, "Initializing Spotify Connect...");
+      char name[65];
+      settings_get_device_name(name, sizeof(name));
+      httpd_handle_t srv = web_server_get_handle();
+      uint16_t port = web_server_get_port();
+      ESP_LOGI(TAG, "  name=%s srv=%p port=%u", name, srv, port);
+      if (srv) {
+        esp_err_t e = spotify_connect_init(name, srv, port);
+        if (e != ESP_OK) {
+          ESP_LOGW(TAG, "Spotify Connect init failed: %s", esp_err_to_name(e));
+        } else {
+          ESP_LOGI(TAG, "Spotify Connect ready (port %u)", port);
+        }
+      } else {
+        ESP_LOGW(TAG, "Web server not running, skipping Spotify Connect");
+      }
+    }
+#endif
     s_airplay_infrastructure_ready = true;
   }
 
@@ -145,16 +192,74 @@ static void network_monitor_task(void *pvParameters) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// "Now playing" — logs one tidy line per track change + play/pause/stop.
+// AirPlay metadata arrives via SETPARAMETER (DMAP-tagged or bplist progress).
+// rtsp_handlers.c already parses it; we just surface it to the serial log.
+
+static rtsp_metadata_t s_np_last;
+static bool s_np_have = false;
+
+static void on_now_playing(rtsp_event_t event, const rtsp_event_data_t *data,
+                           void *user_data) {
+  (void)user_data;
+  switch (event) {
+  case RTSP_EVENT_METADATA: {
+    const rtsp_metadata_t *m = &data->metadata;
+    // Progress-only updates carry no text — skip to avoid log spam.
+    if (!m->title[0] && !m->artist[0]) break;
+    bool track_changed = !s_np_have ||
+                         strcmp(m->title, s_np_last.title) != 0 ||
+                         strcmp(m->artist, s_np_last.artist) != 0;
+    char dur[8];
+    rtsp_format_time_mmss(m->duration_secs, dur, sizeof(dur));
+    if (track_changed) {
+      ESP_LOGI("now_playing", "NOW PLAYING: %s - %s [%s] (%s)",
+               m->artist[0] ? m->artist : "?",
+               m->title[0] ? m->title : "?",
+               m->album[0] ? m->album : "-", dur);
+      if (m->genre[0])
+        ESP_LOGI("now_playing", "  genre: %s", m->genre);
+    }
+    s_np_last = *m;
+    s_np_have = true;
+    break;
+  }
+  case RTSP_EVENT_PLAYING:
+    ESP_LOGI("now_playing", "PLAY");
+    break;
+  case RTSP_EVENT_PAUSED:
+    ESP_LOGI("now_playing", "PAUSE");
+    break;
+  case RTSP_EVENT_DISCONNECTED:
+    s_np_have = false;
+    ESP_LOGI("now_playing", "STOP");
+    break;
+  default:
+    break;
+  }
+}
+
 #ifdef CONFIG_BT_A2DP_ENABLE
 static void on_bt_state_changed(bool connected) {
   if (connected) {
-    ESP_LOGI(TAG, "BT connected — disabling AirPlay");
+    ESP_LOGI(TAG, "BT connected — disabling AirPlay + Wi-Fi");
     stop_airplay_services();
     playback_control_set_source(PLAYBACK_SOURCE_BLUETOOTH);
+    // Drop Wi-Fi so BT (classic BR/EDR) doesn't compete with the WLAN radio
+    // on the shared 2.4 GHz antenna. Eth (if used) stays up. AirPlay/Spotify
+    // are network services so they go quiet automatically — they come back
+    // when Wi-Fi is re-armed below on BT disconnect.
+    if (!ethernet_is_connected()) {
+      wifi_stop();
+    }
   } else {
-    ESP_LOGI(TAG, "BT disconnected — re-enabling AirPlay");
+    ESP_LOGI(TAG, "BT disconnected — re-arming Wi-Fi + AirPlay");
     playback_control_set_source(PLAYBACK_SOURCE_NONE);
-    if (ethernet_is_connected() || wifi_is_connected()) {
+    if (!ethernet_is_connected() && !wifi_is_connected()) {
+      wifi_init_apsta(NULL, NULL);
+      // network_monitor_task will call start_airplay_services once IP is up.
+    } else if (ethernet_is_connected() || wifi_is_connected()) {
       start_airplay_services();
     }
   }
@@ -274,6 +379,13 @@ void app_main(void) {
   if (connected) {
     start_airplay_services();
   }
+
+  // Surface AirPlay metadata + transport state to the serial log.
+  rtsp_events_register(on_now_playing, NULL);
+#ifdef CONFIG_NOWPLAYING_UI_ENABLE
+  // Cache metadata + artwork for the web UI / display.
+  now_playing_store_init();
+#endif
 
 #ifdef CONFIG_BT_A2DP_ENABLE
   // Initialize Bluetooth A2DP Sink

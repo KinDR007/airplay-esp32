@@ -34,6 +34,10 @@
 #include "tlv8.h"
 
 #include "rtsp_events.h"
+#ifdef CONFIG_NOWPLAYING_UI_ENABLE
+#include "now_playing_store.h"
+#include "esp_heap_caps.h"
+#endif
 #include "dacp_client.h"
 
 static const char *TAG = "rtsp_handlers";
@@ -394,6 +398,9 @@ int rtsp_dispatch(int socket, rtsp_conn_t *conn, const uint8_t *raw_request,
   // Find handler in dispatch table
   for (const rtsp_method_handler_t *h = method_handlers; h->method; h++) {
     if (strcasecmp(req.method, h->method) == 0) {
+      ESP_LOGD(TAG, "-> %s  ct=%s  body=%zuB", req.method,
+               req.content_type[0] ? req.content_type : "-",
+               req.body_len);
       h->handler(socket, conn, &req, raw_request, raw_len);
       return 0;
     }
@@ -695,9 +702,78 @@ static void handle_post(int socket, rtsp_conn_t *conn,
 
   } else if (strstr(req->path, "/command")) {
     if (body && body_len >= 8 && memcmp(body, "bplist00", 8) == 0) {
-      int64_t cmd_type = 0;
-      if (bplist_find_int(body, body_len, "type", &cmd_type)) {
-        ESP_LOGI(TAG, "/command type=%lld", (long long)cmd_type);
+      // MediaRemote NowPlayingInfo arrives nested inside params.params.
+      // Keys: kMRMediaRemoteNowPlayingInfo{Title,Artist,Album,Duration,
+      //       ElapsedTime,PlaybackRate,ArtworkData,ArtworkMIMEType}.
+      rtsp_event_data_t ev;
+      memset(&ev, 0, sizeof(ev));
+      char buf[METADATA_STRING_MAX];
+
+      if (bplist_find_string_deep(body, body_len,
+                                  "kMRMediaRemoteNowPlayingInfoTitle", buf,
+                                  sizeof(buf))) {
+        strlcpy(ev.metadata.title, buf, METADATA_STRING_MAX);
+      }
+      if (bplist_find_string_deep(body, body_len,
+                                  "kMRMediaRemoteNowPlayingInfoArtist", buf,
+                                  sizeof(buf))) {
+        strlcpy(ev.metadata.artist, buf, METADATA_STRING_MAX);
+      }
+      if (bplist_find_string_deep(body, body_len,
+                                  "kMRMediaRemoteNowPlayingInfoAlbum", buf,
+                                  sizeof(buf))) {
+        strlcpy(ev.metadata.album, buf, METADATA_STRING_MAX);
+      }
+      if (bplist_find_string_deep(body, body_len,
+                                  "kMRMediaRemoteNowPlayingInfoGenre", buf,
+                                  sizeof(buf))) {
+        strlcpy(ev.metadata.genre, buf, METADATA_STRING_MAX);
+      }
+      double d = 0;
+      if (bplist_find_real_deep(body, body_len,
+                                "kMRMediaRemoteNowPlayingInfoDuration", &d)) {
+        ev.metadata.duration_secs = (uint32_t)d;
+      }
+      if (bplist_find_real_deep(body, body_len,
+                                "kMRMediaRemoteNowPlayingInfoElapsedTime",
+                                &d)) {
+        ev.metadata.position_secs = (uint32_t)d;
+        ev.metadata.position_valid = true;
+      }
+
+      // Emit if we got either full identifying metadata OR a position/duration
+      // update — iPhone interleaves both kinds of bplist messages on /command.
+      bool has_text = ev.metadata.title[0] || ev.metadata.artist[0];
+      bool has_progress = ev.metadata.position_valid ||
+                          ev.metadata.duration_secs > 0;
+
+#ifdef CONFIG_NOWPLAYING_UI_ENABLE
+      if (has_text) {
+        // Artwork only comes alongside full NowPlayingInfo, not on
+        // progress-only updates. Allocate in PSRAM, push into the store.
+        size_t art_cap = NOWPLAYING_ARTWORK_MAX;
+        uint8_t *art = heap_caps_malloc(art_cap, MALLOC_CAP_SPIRAM);
+        if (art) {
+          size_t art_len = 0;
+          if (bplist_find_data_deep(
+                  body, body_len,
+                  "kMRMediaRemoteNowPlayingInfoArtworkData", art, art_cap,
+                  &art_len) &&
+              art_len > 0) {
+            char mime[NOWPLAYING_MIME_MAX] = "image/jpeg";
+            bplist_find_string_deep(
+                body, body_len,
+                "kMRMediaRemoteNowPlayingInfoArtworkMIMEType", mime,
+                sizeof(mime));
+            now_playing_store_set_artwork(art, art_len, mime);
+            ev.metadata.has_artwork = true;
+          }
+          free(art);
+        }
+      }
+#endif
+      if (has_text || has_progress) {
+        rtsp_events_emit(RTSP_EVENT_METADATA, &ev);
       }
     }
     rtsp_send_ok(socket, conn, req->cseq);
@@ -1356,6 +1432,7 @@ static void parse_progress(const char *progress_str, uint32_t sample_rate,
 
     meta->position_secs = (uint32_t)((current - start) / sample_rate);
     meta->duration_secs = (uint32_t)((end - start) / sample_rate);
+    meta->position_valid = true;
 
     char pos_str[16], dur_str[16];
     format_time_mmss(meta->position_secs, pos_str, sizeof(pos_str));
@@ -1372,6 +1449,8 @@ static void handle_set_parameter(int socket, rtsp_conn_t *conn,
                                  size_t raw_len) {
   const uint8_t *body = req->body;
   size_t body_len = req->body_len;
+  ESP_LOGI(TAG, "SET_PARAMETER content-type='%s' body=%zuB",
+           req->content_type[0] ? req->content_type : "-", body_len);
   rtsp_event_data_t event_data;
   memset(&event_data, 0, sizeof(event_data));
   bool has_metadata = false;
@@ -1468,6 +1547,7 @@ static void handle_set_parameter(int socket, rtsp_conn_t *conn,
       double elapsed = 0, duration = 0;
       if (bplist_find_real(body, body_len, "elapsed", &elapsed)) {
         event_data.metadata.position_secs = (uint32_t)elapsed;
+        event_data.metadata.position_valid = true;
         has_metadata = true;
         char elapsed_str[16];
         format_time_mmss((uint32_t)elapsed, elapsed_str, sizeof(elapsed_str));
@@ -1520,6 +1600,9 @@ static void handle_pause(int socket, rtsp_conn_t *conn,
 
   ESP_LOGI(TAG, "PAUSE received");
 
+  // Declick: ramp the output down over the still-playing audio before we stop
+  // feeding it, so pause fades to silence instead of stepping (pop).
+  audio_output_fade_out_wait(60);
   // Stop the audio consumer but leave the buffer filling.  The phone will
   // send a fresh SETRATEANCHORTIME (rate=1) anchor on resume that re-aligns
   // the buffered frames to the correct wall-clock position.
@@ -1538,6 +1621,7 @@ static void handle_flush(int socket, rtsp_conn_t *conn,
 
   // Plain AirPlay 1 FLUSH — always immediate.
   ESP_LOGI(TAG, "FLUSH received");
+  audio_output_fade_out_wait(60); // declick before discarding the buffer
   audio_receiver_seek_flush();
   audio_output_flush();
   rtsp_send_ok(socket, conn, req->cseq);
@@ -1591,6 +1675,7 @@ static void handle_flushbuffered(int socket, rtsp_conn_t *conn,
 
   if (!has_deferred) {
     // Immediate flush: discard everything and reset now.
+    audio_output_fade_out_wait(60); // declick before discarding the buffer
     audio_receiver_seek_flush();
     audio_output_flush();
   }
@@ -1700,6 +1785,7 @@ static void handle_setrateanchortime(int socket, rtsp_conn_t *conn,
 
   if (rate == 0.0) {
     ESP_LOGI(TAG, "SETRATEANCHORTIME: rate=0 -> PAUSING");
+    audio_output_fade_out_wait(60); // declick before stopping the consumer
     conn->stream_paused = true;
     audio_receiver_pause();
     audio_output_flush();

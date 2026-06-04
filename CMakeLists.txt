@@ -18,7 +18,30 @@ if(IDF_VERSION_MAJOR LESS 5 OR (IDF_VERSION_MAJOR EQUAL 5 AND IDF_VERSION_MINOR 
 endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+
+# cspot (vendored in components/cspot/) requires C++20. Set globally so the
+# add_subdirectory() chain in that component picks it up consistently.
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 project(airplay2-receiver VERSION ${PROJECT_VER})
+
+# Globally expose include dirs that PIO ESP-IDF refuses to propagate via the
+# normal REQUIRES mechanism on xtensa builds. Affects:
+# - components/spotify_connect (needs cspot + mbedtls + pthread + nanopb)
+# - components/dlna_renderer (needs esp_http_server + esp_audio_codec + lwip)
+idf_build_set_property(COMPILE_OPTIONS
+    "-I$ENV{IDF_PATH}/components/esp_http_server/include"
+    "-I$ENV{IDF_PATH}/components/esp_http_client/include"
+    "-I$ENV{IDF_PATH}/components/http_parser"
+    "-I$ENV{IDF_PATH}/components/esp_netif/include"
+    "-I$ENV{IDF_PATH}/components/esp_event/include"
+    "-I$ENV{IDF_PATH}/components/mbedtls/mbedtls/include"
+    "-I$ENV{IDF_PATH}/components/mbedtls/port/include"
+    "-I${CMAKE_SOURCE_DIR}/managed_components/espressif__esp_audio_codec/include"
+    "-I${CMAKE_SOURCE_DIR}/managed_components/espressif__esp_audio_codec/include/decoder"
+    "-I${CMAKE_SOURCE_DIR}/managed_components/espressif__esp_audio_codec/include/decoder/impl"
+    APPEND)
 
 include(cmake/fix_usb_device_uac_platformio.cmake)
 

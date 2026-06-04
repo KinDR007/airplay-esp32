@@ -29,6 +29,10 @@
 
 static const char *TAG = "web_server";
 static httpd_handle_t s_server = NULL;
+static uint16_t s_port = 0;
+
+httpd_handle_t web_server_get_handle(void) { return s_server; }
+uint16_t web_server_get_port(void) { return s_port; }
 
 #define SPIFFS_CHUNK_SIZE 1024
 
@@ -680,6 +684,114 @@ static esp_err_t eq_post_handler(httpd_req_t *req) {
 
 #endif /* CONFIG_DAC_TAS58XX */
 
+// ----------------------------------------------------------------------------
+// Now-Playing API — surfaces cached AirPlay metadata + artwork to the web UI.
+// Gated behind CONFIG_NOWPLAYING_UI_ENABLE so classic ESP32 builds (where
+// flash/RAM is tight when paired with A2DP) can skip the artwork cache.
+
+#ifdef CONFIG_NOWPLAYING_UI_ENABLE
+
+#include "now_playing_store.h"
+#include "playback_control.h"
+#include "esp_heap_caps.h"
+
+static esp_err_t nowplaying_json_handler(httpd_req_t *req) {
+  rtsp_metadata_t m;
+  bool have = now_playing_store_get_text(&m);
+  cJSON *o = cJSON_CreateObject();
+  cJSON_AddStringToObject(o, "state", now_playing_store_get_state());
+  cJSON_AddBoolToObject(o, "haveText", have);
+  cJSON_AddStringToObject(o, "title", have ? m.title : "");
+  cJSON_AddStringToObject(o, "artist", have ? m.artist : "");
+  cJSON_AddStringToObject(o, "album", have ? m.album : "");
+  cJSON_AddStringToObject(o, "genre", have ? m.genre : "");
+  cJSON_AddNumberToObject(o, "durationSecs", have ? m.duration_secs : 0);
+  cJSON_AddNumberToObject(o, "positionSecs", have ? m.position_secs : 0);
+  cJSON_AddBoolToObject(o, "haveArtwork",
+                        now_playing_store_get_artwork(NULL, 0, NULL, 0) > 0);
+  cJSON_AddNumberToObject(o, "revision", now_playing_store_get_revision());
+  char *s = cJSON_PrintUnformatted(o);
+  cJSON_Delete(o);
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  esp_err_t rc = httpd_resp_send(req, s, strlen(s));
+  free(s);
+  return rc;
+}
+
+static esp_err_t nowplaying_artwork_handler(httpd_req_t *req) {
+  // First read length+mime by querying with zero capacity.
+  char mime[NOWPLAYING_MIME_MAX] = {0};
+  size_t len = now_playing_store_get_artwork(NULL, 0, mime, sizeof(mime));
+  if (len == 0) {
+    httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no artwork");
+    return ESP_OK;
+  }
+  // Allocate exact-size buffer in PSRAM, refetch into it.
+  uint8_t *buf = heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+  if (!buf) {
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+    return ESP_FAIL;
+  }
+  size_t got = now_playing_store_get_artwork(buf, len, NULL, 0);
+  httpd_resp_set_type(req, mime[0] ? mime : "image/jpeg");
+  // Artwork is small and changes only on track skip — short cache OK.
+  httpd_resp_set_hdr(req, "Cache-Control", "max-age=10");
+  esp_err_t rc = httpd_resp_send(req, (const char *)buf, got);
+  free(buf);
+  return rc;
+}
+
+static esp_err_t nowplaying_page_handler(httpd_req_t *req) {
+  return serve_spiffs_file(req, "/spiffs/www/nowplaying.html", "text/html");
+}
+
+// Transport control: POST /api/control?cmd=<command>. Routes to the
+// source-agnostic playback controller (AirPlay → DACP back to the iOS/macOS
+// client, BT → AVRCP). Used by the web UI and the Home Assistant integration.
+//   play | pause          — resolved against current state (idempotent)
+//   play_pause            — raw toggle
+//   next | previous|prev  — track skip
+//   volume_up|volume_down — one ~3 dB step
+static esp_err_t control_handler(httpd_req_t *req) {
+  char query[64] = {0};
+  char cmd[24] = {0};
+  if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+    httpd_query_key_value(query, "cmd", cmd, sizeof(cmd));
+  }
+
+  bool ok = true;
+  if (strcmp(cmd, "play") == 0) {
+    if (strcmp(now_playing_store_get_state(), "playing") != 0)
+      playback_control_play_pause();
+  } else if (strcmp(cmd, "pause") == 0) {
+    if (strcmp(now_playing_store_get_state(), "playing") == 0)
+      playback_control_play_pause();
+  } else if (strcmp(cmd, "play_pause") == 0) {
+    playback_control_play_pause();
+  } else if (strcmp(cmd, "next") == 0) {
+    playback_control_next();
+  } else if (strcmp(cmd, "prev") == 0 || strcmp(cmd, "previous") == 0) {
+    playback_control_prev();
+  } else if (strcmp(cmd, "volume_up") == 0) {
+    playback_control_volume_up();
+  } else if (strcmp(cmd, "volume_down") == 0) {
+    playback_control_volume_down();
+  } else {
+    ok = false;
+  }
+
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  if (!ok) {
+    httpd_resp_set_status(req, "400 Bad Request");
+    return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"unknown cmd\"}");
+  }
+  return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+#endif /* CONFIG_NOWPLAYING_UI_ENABLE */
+
 esp_err_t web_server_start(uint16_t port) {
   if (s_server) {
     ESP_LOGW(TAG, "Web server already running");
@@ -695,7 +807,7 @@ esp_err_t web_server_start(uint16_t port) {
   config.max_open_sockets = 3; // Limit to save lwIP socket slots for AirPlay
 #endif
   config.lru_purge_enable = true; // Reclaim stale sockets when all are in use
-  config.max_uri_handlers = 24;   // Room for captive portal + EQ + speedtest
+  config.max_uri_handlers = 32;   // Room for captive portal + EQ + speedtest + cspot
   config.max_resp_headers = 8;
   config.stack_size = 8192;
 
@@ -704,6 +816,7 @@ esp_err_t web_server_start(uint16_t port) {
     ESP_LOGE(TAG, "Failed to start web server: %s", esp_err_to_name(err));
     return err;
   }
+  s_port = port;
 
   // Register handlers
   httpd_uri_t root_uri = {
@@ -717,6 +830,25 @@ esp_err_t web_server_start(uint16_t port) {
   httpd_uri_t logs_uri = {
       .uri = "/logs", .method = HTTP_GET, .handler = logs_page_handler};
   httpd_register_uri_handler(s_server, &logs_uri);
+
+#ifdef CONFIG_NOWPLAYING_UI_ENABLE
+  httpd_uri_t np_page = {.uri = "/nowplaying",
+                         .method = HTTP_GET,
+                         .handler = nowplaying_page_handler};
+  httpd_uri_t np_json = {.uri = "/api/nowplaying",
+                         .method = HTTP_GET,
+                         .handler = nowplaying_json_handler};
+  httpd_uri_t np_art = {.uri = "/api/nowplaying/artwork",
+                        .method = HTTP_GET,
+                        .handler = nowplaying_artwork_handler};
+  httpd_uri_t np_ctrl = {.uri = "/api/control",
+                         .method = HTTP_POST,
+                         .handler = control_handler};
+  httpd_register_uri_handler(s_server, &np_page);
+  httpd_register_uri_handler(s_server, &np_json);
+  httpd_register_uri_handler(s_server, &np_art);
+  httpd_register_uri_handler(s_server, &np_ctrl);
+#endif
 
   httpd_uri_t speedtest_page_uri = {.uri = "/speedtest",
                                     .method = HTTP_GET,
@@ -832,6 +964,7 @@ void web_server_stop(void) {
   if (s_server) {
     httpd_stop(s_server);
     s_server = NULL;
+    s_port = 0;
     ESP_LOGI(TAG, "Web server stopped");
   }
 }

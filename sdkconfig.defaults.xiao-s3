@@ -1,0 +1,24 @@
+# XIAO ESP32-S3 overrides on top of sdkconfig.defaults.esp32s3.
+# 8 MB flash, 8 MB PSRAM.
+
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+
+# Disable Spotify Connect — PIO ESP-IDF platform mangles cspot compile defines
+# (BELL_ONLY_CJSON et al.), making cspot fail to build here. Use ESP32-P4 if
+# you need Spotify Connect.
+CONFIG_SPOTIFY_CONNECT_ENABLE=n
+
+# DLNA / UPnP MediaRenderer disabled — keep this target AirPlay-only.
+CONFIG_DLNA_RENDERER_ENABLE=n
+
+# Now-playing web UI (/nowplaying page + REST API + 256 KB PSRAM artwork cache).
+# Off by default; plenty of headroom on the XIAO's 8 MB flash / 8 MB PSRAM.
+CONFIG_NOWPLAYING_UI_ENABLE=y
+
+# I2S pins for the PCM5102A DAC. The default S3 pins (11/12/13) are NOT broken
+# out on the XIAO ESP32-S3, so remap to exposed pads:
+#   BCK -> GPIO2 (pad D1), WS/LRCK -> GPIO3 (pad D2), DOUT/DIN -> GPIO4 (pad D3)
+CONFIG_I2S_BCK_IO=2
+CONFIG_I2S_WS_IO=3
+CONFIG_I2S_DO_IO=4

@@ -4,6 +4,11 @@ CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
 CONFIG_DAC_TAS57XX=y
 CONFIG_TAS57XX_MAX_VOLUME=-20
+
+# Spotify Connect (cspot) requires C++ exceptions, which break the linker on
+# Xtensa toolchain 14.2 (missing __eh_frame). Disable here — classic ESP32
+# environments do AirPlay + A2DP only. Spotify Connect: use ESP32-S3 or P4.
+CONFIG_SPOTIFY_CONNECT_ENABLE=n
 CONFIG_DAC_CONTROLS_VOLUME=y
 
 # GPIO defaults

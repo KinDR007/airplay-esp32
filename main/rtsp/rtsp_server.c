@@ -264,6 +264,11 @@ cleanup:
   close(slot->socket);
   slot->socket = -1;
 
+  // Smoothly ramp the output down over the still-buffered audio before cutting
+  // it, so disconnect fades to silence instead of stopping abruptly. Blocks
+  // briefly (or until the buffer drains). The following flush re-arms fade-in.
+  audio_output_fade_out_wait(180);
+
   // Immediate: stop audio and NTP
   audio_receiver_stop();
   audio_output_flush();

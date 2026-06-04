@@ -11,6 +11,10 @@
 #include "esp_timer.h"
 #include "nvs_flash.h"
 
+#if CONFIG_ESP_WIFI_REMOTE_ENABLED
+#include "esp_hosted.h"
+#endif
+
 #include "wifi.h"
 #include "settings.h"
 
@@ -222,6 +226,12 @@ static void wifi_init_base(void) {
       WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL, &instance_any_id));
   ESP_ERROR_CHECK(esp_event_handler_instance_register(
       IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL, &instance_got_ip));
+
+#if CONFIG_ESP_WIFI_REMOTE_ENABLED
+  // Initialize ESP-Hosted transport (SDIO link to ESP32-C6) before Wi-Fi init.
+  // Required on ESP32-P4 where Wi-Fi runs on a coprocessor via esp_wifi_remote.
+  ESP_ERROR_CHECK(esp_hosted_init());
+#endif
 
   wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
   ESP_ERROR_CHECK(esp_wifi_init(&cfg));
