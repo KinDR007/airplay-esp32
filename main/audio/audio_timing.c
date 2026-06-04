@@ -554,6 +554,13 @@ size_t audio_timing_read(audio_timing_t *timing, audio_buffer_t *buffer,
           if ((early_us >= -TIMING_THRESHOLD_US &&
                early_us <= TIMING_THRESHOLD_US) ||
               flush_elapsed >= POST_FLUSH_TIMEOUT_US) {
+            // Hand back to anchor-enforced timing. Early frames are then HELD
+            // until their scheduled play time — this is exactly what keeps us
+            // in sync with other AirPlay speakers / the source in a multi-room
+            // group. Do NOT shift the anchor here: it desyncs this device from
+            // the rest of the group (was the cause of MacBook + this device
+            // playing out of time). A brief gap after a resume/seek is the
+            // correct, in-sync behaviour.
             ESP_LOGI(TAG, "post_flush done: early=%lld ms, elapsed=%lld ms",
                      early_us / 1000LL, flush_elapsed / 1000LL);
             timing->post_flush = false;

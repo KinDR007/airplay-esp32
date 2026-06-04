@@ -122,8 +122,19 @@ menu "Board Configuration"
                 int "I2S VCC GPIO"
                 default -1
                 help
-                    GPIO to provide VCC to I2S DAC if powered from GPIO. 
+                    GPIO to provide VCC to I2S DAC if powered from GPIO.
                     20mA maximum! Set to -1 to disable.
+
+            config DAC_SOFT_MUTE_GPIO
+                int "DAC soft-mute (XSMT) GPIO"
+                default -1
+                help
+                    GPIO wired to the DAC's soft-mute pin (e.g. XSMT on a
+                    PCM5102A). Driven LOW to mute, HIGH to unmute — the audio
+                    output mutes it while idle and on disconnect/pause, and
+                    unmutes it when playback resumes, giving a click-free
+                    transition via the DAC's built-in analog ramp.
+                    Set to -1 to disable.
         endmenu
 
         menu "Control GPIOs"

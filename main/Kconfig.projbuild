@@ -175,6 +175,18 @@ menu "Airplay ESP Configuration"
             ESP32-S3 (hardware FPU): 28 recommended.
             ESP32 (no FPU): 12 recommended.
 
+    config OUTPUT_GAIN_PERCENT
+        int "Output gain / attenuation (%)"
+        range 1 100
+        default 100
+        help
+            Master attenuation applied to the PCM output on top of the AirPlay
+            volume, in percent (100 = no change, full scale). Lower it when the
+            line-out is too hot for the connected amp/input even at low AirPlay
+            volumes — e.g. 10 makes full AirPlay volume ≈ 1/10 of full scale, so
+            the whole iPhone slider range stays usable. Costs a little bit-depth
+            resolution; only use as much attenuation as you need.
+
     endmenu
 
     menu "Bluetooth Configuration"

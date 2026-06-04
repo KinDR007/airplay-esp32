@@ -22,3 +22,13 @@ CONFIG_NOWPLAYING_UI_ENABLE=y
 CONFIG_I2S_BCK_IO=2
 CONFIG_I2S_WS_IO=3
 CONFIG_I2S_DO_IO=4
+
+# PCM5102A soft-mute (XSMT) on GPIO6 (pad D5). Firmware mutes the DAC while idle
+# and on disconnect/pause and unmutes on play — click-free via the DAC's analog
+# ramp. Wire XSMT to D5 instead of 3V3.
+CONFIG_DAC_SOFT_MUTE_GPIO=6
+
+# Attenuate the line-out — the PCM5102A full-scale is too hot for the amp even
+# at low AirPlay volume. 10 = full AirPlay volume ≈ 1/10 of full scale, so the
+# whole iPhone slider stays usable. Raise toward 100 if too quiet.
+CONFIG_OUTPUT_GAIN_PERCENT=10

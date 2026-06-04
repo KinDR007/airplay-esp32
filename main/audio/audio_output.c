@@ -19,6 +19,9 @@
 #if CONFIG_I2S_VCC_IO >= 0
 #define I2S_VCC_PIN CONFIG_I2S_VCC_IO
 #endif
+#if CONFIG_DAC_SOFT_MUTE_GPIO >= 0
+#define DAC_MUTE_PIN CONFIG_DAC_SOFT_MUTE_GPIO
+#endif
 
 #define TAG           "audio_output"
 #define I2S_SCK_PIN   CONFIG_I2S_SCK_IO
@@ -52,10 +55,26 @@ static volatile bool resample_reinit_needed = false;
 // abrupt jump. The gain steps once per stereo frame inside apply_volume().
 #define FADE_IN_MS  500
 #define FADE_OUT_MS 180
+// After this many consecutive silent reads (no client / paused / stopped /
+// underrun) the playback task soft-mutes the DAC so an idle line-out doesn't
+// hiss through the amp. ~0.4 s at the output frame rate — long enough not to
+// trip on brief mid-stream gaps, short enough to kill idle hiss quickly.
+#define IDLE_MUTE_FRAMES ((2 * OUTPUT_RATE) / (5 * FRAME_SAMPLES))
 static volatile int32_t s_fade_gain   = 0;     // current gain, stepped per frame
 static volatile int32_t s_fade_target = 0;     // 0 = silent, 32768 = unity
 static volatile int32_t s_fade_step   = 0;     // Q15 delta per stereo frame
 static volatile bool s_fade_in_pending = true; // fade in when audio next resumes
+static volatile bool s_user_muted = false;     // explicit mute (e.g. from HA)
+
+// Drive the DAC's soft-mute pin (e.g. PCM5102A XSMT): LOW = mute, HIGH = play.
+// The DAC ramps internally, so toggling it is click-free. No-op if unconfigured.
+static void dac_set_mute(bool mute) {
+#ifdef DAC_MUTE_PIN
+  gpio_set_level(DAC_MUTE_PIN, mute ? 0 : 1);
+#else
+  (void)mute;
+#endif
+}
 
 static void fade_to(int32_t target, uint32_t ms) {
   uint32_t frames = (ms * (uint32_t)OUTPUT_RATE) / 1000u;
@@ -67,7 +86,10 @@ static void fade_to(int32_t target, uint32_t ms) {
   s_fade_target = target;
 }
 
-void audio_output_fade_in(uint32_t ms) { fade_to(32768, ms ? ms : 1); }
+void audio_output_fade_in(uint32_t ms) {
+  dac_set_mute(false); // un-mute the DAC before ramping the digital gain up
+  fade_to(32768, ms ? ms : 1);
+}
 void audio_output_fade_out(uint32_t ms) { fade_to(0, ms ? ms : 1); }
 
 void audio_output_fade_out_wait(uint32_t ms) {
@@ -79,13 +101,39 @@ void audio_output_fade_out_wait(uint32_t ms) {
     vTaskDelay(pdMS_TO_TICKS(5));
     waited += 5;
   }
+  dac_set_mute(true); // analog-mute the DAC now that it's faded to silence
+  // Now that we've faded to silence, arm a fade-in so the next time audio
+  // resumes it ramps up (and un-mutes) smoothly from zero.
+  s_fade_in_pending = true;
 }
+
+// Explicit user mute (e.g. the Home Assistant mute button). Independent of the
+// source/AirPlay volume: ramps the local output to silence (+ DAC soft-mute)
+// and holds it there — surviving track changes/reconnects — until unmuted.
+void audio_output_set_mute(bool mute) {
+  if (mute == s_user_muted) return;
+  s_user_muted = mute;
+  if (mute) {
+    audio_output_fade_out(FADE_OUT_MS); // ramp to silence (click-free)
+    dac_set_mute(true);
+  } else {
+    dac_set_mute(false);
+    audio_output_fade_in(FADE_IN_MS); // ramp back up
+  }
+}
+
+bool audio_output_is_muted(void) { return s_user_muted; }
 
 static void apply_volume(int16_t *buf, size_t n) {
 #ifdef CONFIG_DAC_CONTROLS_VOLUME
   int32_t vol = 32768; // DAC handles volume in hardware; fade still applies
 #else
   int32_t vol = airplay_get_volume_q15();
+#endif
+#if CONFIG_OUTPUT_GAIN_PERCENT < 100
+  // Master output attenuation (line-out too hot for the amp). Scales the whole
+  // volume range down so the full AirPlay slider stays usable.
+  vol = (vol * CONFIG_OUTPUT_GAIN_PERCENT) / 100;
 #endif
   int32_t g = s_fade_gain;
   const int32_t target = s_fade_target;
@@ -119,6 +167,7 @@ static void playback_task(void *arg) {
   }
 
   size_t written;
+  uint32_t silent_run = 0; // consecutive reads with no audio (idle detection)
   while (playback_running) {
     if (resample_reinit_needed) {
       resample_reinit_needed = false;
@@ -131,16 +180,16 @@ static void playback_task(void *arg) {
       // it stops BCK, and the PCM5102A (BCK-only mode, SCK=GND) re-locks its
       // internal PLL with an audible pop. Keeping the channel running — the
       // task writes silence between streams — keeps the DAC clocked and quiet.
-      // Stale DMA audio is harmless: callers ramp the gain down before flushing
-      // (declick), so whatever is left in the DMA is already near-silent.
-      // Mute and arm a fade-in so audio resuming after the flush ramps up.
-      s_fade_gain = 0;
-      s_fade_target = 0;
-      s_fade_in_pending = true;
+      // Also do NOT touch the fade gain here: FLUSH fires on every resume /
+      // seek / track change (realtime mode: TEARDOWN→SETUP→FLUSH→RECORD), so
+      // dropping gain to 0 would dip audio that's already playing. The gain is
+      // only driven to 0 on a genuine pause/disconnect (audio_output_fade_out),
+      // which also arms the fade-in for the next start.
     }
     size_t samples = audio_receiver_read(pcm, FRAME_SAMPLES + 1);
     if (samples > 0) {
-      if (s_fade_in_pending) {
+      silent_run = 0;
+      if (s_fade_in_pending && !s_user_muted) {
         s_fade_in_pending = false;
         audio_output_fade_in(FADE_IN_MS);
       }
@@ -157,6 +206,17 @@ static void playback_task(void *arg) {
                         portMAX_DELAY);
       taskYIELD();
     } else {
+      // No audio. After a short spell of continuous silence the source is idle
+      // (no client / paused / stopped), so soft-mute the DAC to kill line-out
+      // hiss and arm a fade-in so the next audio ramps up cleanly.
+      if (silent_run < IDLE_MUTE_FRAMES) {
+        if (++silent_run == IDLE_MUTE_FRAMES) {
+          s_fade_gain = 0;
+          s_fade_target = 0;
+          s_fade_in_pending = true;
+          dac_set_mute(true);
+        }
+      }
       led_audio_feed(silence, FRAME_SAMPLES);
       i2s_channel_write(tx_handle, silence, (size_t)FRAME_SAMPLES * 4, &written,
                         pdMS_TO_TICKS(10));
@@ -201,6 +261,12 @@ esp_err_t audio_output_init(void) {
   gpio_reset_pin(I2S_VCC_PIN);
   gpio_set_direction(I2S_VCC_PIN, GPIO_MODE_OUTPUT);
   gpio_set_level(I2S_VCC_PIN, 1);
+#endif
+#ifdef DAC_MUTE_PIN
+  // Start muted; the playback task unmutes via fade-in when audio begins.
+  gpio_reset_pin(DAC_MUTE_PIN);
+  gpio_set_direction(DAC_MUTE_PIN, GPIO_MODE_OUTPUT);
+  gpio_set_level(DAC_MUTE_PIN, 0);
 #endif
 
   ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(tx_handle, &std_cfg), TAG,

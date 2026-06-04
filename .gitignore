@@ -18,3 +18,7 @@ user_platformio.ini
 
 # CI packaging output
 dist/
+
+# Python bytecode
+__pycache__/
+*.pyc

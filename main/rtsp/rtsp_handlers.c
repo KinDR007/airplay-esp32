@@ -1620,8 +1620,11 @@ static void handle_flush(int socket, rtsp_conn_t *conn,
   (void)raw_len;
 
   // Plain AirPlay 1 FLUSH — always immediate.
+  // NOTE: do NOT mute/ramp here. FLUSH fires as part of a normal resume and
+  // track change (realtime mode: TEARDOWN→SETUP→FLUSH→RECORD), so muting here
+  // causes an audible dip just after playback restarts. audio_output_flush()
+  // re-arms the fade-in so the post-flush audio still ramps up smoothly.
   ESP_LOGI(TAG, "FLUSH received");
-  audio_output_fade_out_wait(60); // declick before discarding the buffer
   audio_receiver_seek_flush();
   audio_output_flush();
   rtsp_send_ok(socket, conn, req->cseq);
@@ -1674,8 +1677,9 @@ static void handle_flushbuffered(int socket, rtsp_conn_t *conn,
   }
 
   if (!has_deferred) {
-    // Immediate flush: discard everything and reset now.
-    audio_output_fade_out_wait(60); // declick before discarding the buffer
+    // Immediate flush: discard everything and reset now. No mute/ramp here —
+    // FLUSHBUFFERED fires on resume/seek; audio_output_flush() re-arms the
+    // fade-in so the new audio ramps up smoothly without a mid-stream dip.
     audio_receiver_seek_flush();
     audio_output_flush();
   }

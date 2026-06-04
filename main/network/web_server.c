@@ -693,6 +693,7 @@ static esp_err_t eq_post_handler(httpd_req_t *req) {
 
 #include "now_playing_store.h"
 #include "playback_control.h"
+#include "audio_output.h"
 #include "esp_heap_caps.h"
 
 static esp_err_t nowplaying_json_handler(httpd_req_t *req) {
@@ -709,6 +710,7 @@ static esp_err_t nowplaying_json_handler(httpd_req_t *req) {
   cJSON_AddNumberToObject(o, "positionSecs", have ? m.position_secs : 0);
   cJSON_AddBoolToObject(o, "haveArtwork",
                         now_playing_store_get_artwork(NULL, 0, NULL, 0) > 0);
+  cJSON_AddBoolToObject(o, "muted", audio_output_is_muted());
   cJSON_AddNumberToObject(o, "revision", now_playing_store_get_revision());
   char *s = cJSON_PrintUnformatted(o);
   cJSON_Delete(o);
@@ -753,6 +755,7 @@ static esp_err_t nowplaying_page_handler(httpd_req_t *req) {
 //   play_pause            — raw toggle
 //   next | previous|prev  — track skip
 //   volume_up|volume_down — one ~3 dB step
+//   mute|unmute|mute_toggle — local output mute (DAC soft-mute, source-independent)
 static esp_err_t control_handler(httpd_req_t *req) {
   char query[64] = {0};
   char cmd[24] = {0};
@@ -777,6 +780,12 @@ static esp_err_t control_handler(httpd_req_t *req) {
     playback_control_volume_up();
   } else if (strcmp(cmd, "volume_down") == 0) {
     playback_control_volume_down();
+  } else if (strcmp(cmd, "mute") == 0) {
+    audio_output_set_mute(true);
+  } else if (strcmp(cmd, "unmute") == 0) {
+    audio_output_set_mute(false);
+  } else if (strcmp(cmd, "mute_toggle") == 0) {
+    audio_output_set_mute(!audio_output_is_muted());
   } else {
     ok = false;
   }

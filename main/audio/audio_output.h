@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdbool.h>
+
 #include "esp_err.h"
 
 #include "freertos/FreeRTOS.h"
@@ -67,3 +69,13 @@ void audio_output_fade_out(uint32_t ms);
  * audio on disconnect so the cut isn't abrupt.
  */
 void audio_output_fade_out_wait(uint32_t ms);
+
+/**
+ * Explicit user mute of the local output (independent of source volume).
+ * Ramps to silence + DAC soft-mute and holds until unmuted. Used by the
+ * Home Assistant mute button via POST /api/control?cmd=mute.
+ */
+void audio_output_set_mute(bool mute);
+
+/** Current explicit-mute state (for status reporting). */
+bool audio_output_is_muted(void);
