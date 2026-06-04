@@ -26,3 +26,8 @@ CONFIG_LED_STATUS_BRIGHTNESS=80
 CONFIG_LED_STATUS_PLAYING_STEADY=y
 CONFIG_LED_STATUS_PAUSED_BLINK_MEDIUM=y
 CONFIG_LED_STATUS_STANDBY_BLINK_SLOW=y
+
+# Spotify Connect (cspot) needs C++ exceptions, which are broken on the
+# classic ESP32 (Xtensa LX6) 14.2 toolchain. Disable on this classic target;
+# use an S3/P4 build for Spotify.
+CONFIG_SPOTIFY_CONNECT_ENABLE=n

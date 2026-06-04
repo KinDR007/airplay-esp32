@@ -44,3 +44,7 @@ CONFIG_LED_STATUS_STANDBY_BLINK_SLOW=y
 
 # Use boot button for mute / play pause
 CONFIG_BTN_PLAY_PAUSE_GPIO=0
+# Spotify Connect (cspot) needs C++ exceptions, which are broken on the
+# classic ESP32 (Xtensa LX6) 14.2 toolchain. Disable on this classic target;
+# use an S3/P4 build for Spotify.
+CONFIG_SPOTIFY_CONNECT_ENABLE=n

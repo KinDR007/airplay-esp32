@@ -29,3 +29,8 @@ CONFIG_ETH_W5500_RST_GPIO=14
 CONFIG_DISPLAY_SPI_CS=15
 CONFIG_DISPLAY_SPI_DC=4
 CONFIG_DISPLAY_SPI_RST=32
+
+# Spotify Connect (cspot) needs C++ exceptions, which are broken on the
+# classic ESP32 (Xtensa LX6) 14.2 toolchain. Disable on this classic target;
+# use an S3/P4 build for Spotify.
+CONFIG_SPOTIFY_CONNECT_ENABLE=n
