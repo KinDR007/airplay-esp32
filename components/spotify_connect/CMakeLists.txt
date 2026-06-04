@@ -54,19 +54,3 @@ target_include_directories(${COMPONENT_LIB} PRIVATE
 # generate_proto_sources is a custom target defined in cspot_lib/CMakeLists.txt
 # (visible globally after add_subdirectory in components/cspot/).
 add_dependencies(${COMPONENT_LIB} generate_proto_sources)
-
-# add_dependencies only orders the *link* step of this component. On a clean
-# parallel build that lets spotify_connect.cpp compile before nanopb has
-# generated protobuf/*.pb.h (incremental builds get away with it because the
-# headers linger from a previous run). Pin the generated headers as explicit
-# object inputs so Ninja always generates them first — fixes clean CI builds.
-file(GLOB _cspot_protos
-     "${CMAKE_CURRENT_SOURCE_DIR}/../cspot/cspot_lib/protobuf/*.proto")
-set(_cspot_proto_hdrs "")
-foreach(_p ${_cspot_protos})
-    get_filename_component(_n ${_p} NAME_WE)
-    list(APPEND _cspot_proto_hdrs
-         "${CMAKE_BINARY_DIR}/esp-idf/cspot/cspot_lib/protobuf/${_n}.pb.h")
-endforeach()
-set_property(SOURCE spotify_connect.cpp APPEND PROPERTY
-             OBJECT_DEPENDS "${_cspot_proto_hdrs}")
