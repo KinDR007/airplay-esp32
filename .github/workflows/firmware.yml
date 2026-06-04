@@ -69,7 +69,11 @@ jobs:
           pip install platformio "esptool~=4.8"
 
       - name: Build firmware
-        run: pio run -e ${{ matrix.env }}
+        # Retry once as a safety net: the first clean build of a Spotify-enabled
+        # env can still race nanopb proto generation; the retry reuses the
+        # now-generated headers. The OBJECT_DEPENDS fix in spotify_connect should
+        # make this unnecessary, but the retry keeps release builds robust.
+        run: pio run -e ${{ matrix.env }} || pio run -e ${{ matrix.env }}
 
       - name: Build filesystem (SPIFFS)
         run: pio run -e ${{ matrix.env }} -t buildfs
