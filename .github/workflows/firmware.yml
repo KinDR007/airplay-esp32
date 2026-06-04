@@ -71,18 +71,27 @@ jobs:
           sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Build firmware
-        # cspot (Spotify) generates protobuf/*.pb.h with nanopb, whose generator
-        # runs under PlatformIO's espidf venv python and needs `protobuf` +
-        # `pkg_resources` (the latter still ships in setuptools<81). A fresh
-        # venv has neither. First pass bootstraps the venv (fails at proto-gen
-        # for Spotify envs); we then inject the deps and build for real. For
-        # non-Spotify envs the first pass already succeeds and the second is a
-        # no-op.
+        # cspot (Spotify) generates protobuf/*.pb.h with nanopb at build time.
+        # The generator runs via `#!/usr/bin/env python3`, so that python needs
+        # `protobuf` + `pkg_resources` (pkg_resources still ships in <81). And on
+        # a clean parallel build Ninja compiles spotify_connect.cpp before the
+        # generator runs, so we generate the headers explicitly up front.
         run: |
+          # 1) Bootstrap the espidf venv + configure (creates build.ninja).
+          #    May fail at proto-gen for Spotify envs — handled below.
           pio run -e ${{ matrix.env }} || true
+          # 2) Make protobuf + pkg_resources importable for the generator
+          #    (runner python that `env python3` resolves to, and the venv).
+          pip install -U "protobuf" "setuptools<81"
           for py in "$HOME"/.platformio/penv/.espidf-*/bin/python; do
             [ -x "$py" ] && "$py" -m pip install -U "protobuf" "setuptools<81" || true
           done
+          # 3) Generate cspot's protobuf headers explicitly (no-op for
+          #    Spotify-disabled envs, where the target doesn't exist).
+          ninja=$(ls "$HOME"/.platformio/packages/tool-ninja/ninja 2>/dev/null || command -v ninja)
+          "$ninja" -C ".pio/build/${{ matrix.env }}" \
+            esp-idf/cspot/cspot_lib/generate_proto_sources || true
+          # 4) Real build — headers now exist.
           pio run -e ${{ matrix.env }}
 
       - name: Build filesystem (SPIFFS)
