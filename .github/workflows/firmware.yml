@@ -63,10 +63,20 @@ jobs:
             pio-${{ runner.os }}-${{ matrix.env }}-
             pio-${{ runner.os }}-
 
-      - name: Install PlatformIO + esptool
+      - name: Install proto toolchain (cspot / nanopb)
+        # cspot generates protobuf/*.pb.h at build time via nanopb, which needs
+        # the protoc compiler + the Python protobuf lib (>=5, the vendored
+        # generator is patched for it). These are absent on a clean runner, so
+        # generation silently produces nothing and Spotify-enabled envs fail
+        # with "protobuf/mercury.pb.h: No such file".
         run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
           python -m pip install --upgrade pip
-          pip install platformio "esptool~=4.8"
+          pip install "protobuf>=5" grpcio-tools
+
+      - name: Install PlatformIO + esptool
+        run: pip install platformio "esptool~=4.8"
 
       - name: Build firmware
         # Retry once as a safety net: the first clean build of a Spotify-enabled
