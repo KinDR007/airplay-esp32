@@ -10,6 +10,12 @@
 // Default device name (used if none configured)
 #define SETTINGS_DEFAULT_DEVICE_NAME "ESP32 AirPlay"
 
+// Default AirPlay "model" string. Controls the icon Apple shows in the AirPlay
+// menu / Home app. "AudioAccessory5,1" = HomePod mini. Other values map to
+// other icons (Apple TV, AirPort Express, generic speaker, …). Purely cosmetic;
+// does not affect streaming. Selectable via the web UI.
+#define SETTINGS_DEFAULT_AIRPLAY_MODEL "AudioAccessory5,1"
+
 /**
  * Initialize settings module (call once at startup)
  */
@@ -98,6 +104,18 @@ esp_err_t settings_get_device_name(char *name, size_t len);
  * @param name Device name
  */
 esp_err_t settings_set_device_name(const char *name);
+
+/**
+ * Get the configured AirPlay model string (controls the Apple icon).
+ * Returns SETTINGS_DEFAULT_AIRPLAY_MODEL if none stored. Always succeeds.
+ */
+esp_err_t settings_get_airplay_model(char *model, size_t len);
+
+/**
+ * Save the AirPlay model string. Takes effect after a reboot (re-announced
+ * in mDNS / RTSP /info).
+ */
+esp_err_t settings_set_airplay_model(const char *model);
 
 // ---- EQ settings ----
 

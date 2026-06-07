@@ -308,6 +308,58 @@ static esp_err_t device_name_handler(httpd_req_t *req) {
   return ESP_OK;
 }
 
+// GET  /api/device/model  -> {"model":"AudioAccessory5,1"}
+// POST /api/device/model  {"model":"..."} -> {"success":true,"reboot_required":true}
+// Controls the AirPlay "model" string = the icon Apple shows. Takes effect on
+// reboot (re-announced in mDNS + RTSP /info).
+static esp_err_t device_model_handler(httpd_req_t *req) {
+  if (req->method == HTTP_GET) {
+    char model[33];
+    settings_get_airplay_model(model, sizeof(model));
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "model", model);
+    char *s = cJSON_PrintUnformatted(o);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_sendstr(req, s);
+    free(s);
+    cJSON_Delete(o);
+    return ESP_OK;
+  }
+
+  char content[128];
+  int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+  if (ret <= 0) {
+    httpd_resp_send_500(req);
+    return ESP_FAIL;
+  }
+  content[ret] = '\0';
+
+  cJSON *json = cJSON_Parse(content);
+  cJSON *resp = cJSON_CreateObject();
+  cJSON *m = json ? cJSON_GetObjectItem(json, "model") : NULL;
+  if (m && cJSON_IsString(m)) {
+    esp_err_t err = settings_set_airplay_model(cJSON_GetStringValue(m));
+    cJSON_AddBoolToObject(resp, "success", err == ESP_OK);
+    if (err == ESP_OK) {
+      cJSON_AddBoolToObject(resp, "reboot_required", true);
+    } else {
+      cJSON_AddStringToObject(resp, "error", esp_err_to_name(err));
+    }
+  } else {
+    cJSON_AddBoolToObject(resp, "success", false);
+    cJSON_AddStringToObject(resp, "error", "Invalid model");
+  }
+
+  char *s = cJSON_Print(resp);
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_send(req, s, HTTPD_RESP_USE_STRLEN);
+  free(s);
+  if (json) cJSON_Delete(json);
+  cJSON_Delete(resp);
+  return ESP_OK;
+}
+
 static esp_err_t ota_update_handler(httpd_req_t *req) {
   if (req->content_len == 0) {
     httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No firmware uploaded");
@@ -893,6 +945,15 @@ esp_err_t web_server_start(uint16_t port) {
                                  .method = HTTP_POST,
                                  .handler = device_name_handler};
   httpd_register_uri_handler(s_server, &device_name_uri);
+
+  httpd_uri_t device_model_get = {.uri = "/api/device/model",
+                                  .method = HTTP_GET,
+                                  .handler = device_model_handler};
+  httpd_register_uri_handler(s_server, &device_model_get);
+  httpd_uri_t device_model_set = {.uri = "/api/device/model",
+                                  .method = HTTP_POST,
+                                  .handler = device_model_handler};
+  httpd_register_uri_handler(s_server, &device_model_set);
 
   httpd_uri_t ota_uri = {.uri = "/api/ota/update",
                          .method = HTTP_POST,

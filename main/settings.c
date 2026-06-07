@@ -16,10 +16,12 @@ static const char *TAG = "settings";
 #define NVS_KEY_WIFI_PASSWORD "wifi_pass"
 #define NVS_KEY_DEVICE_NAME   "device_name"
 #define NVS_KEY_EQ_GAINS      "eq_gains"
+#define NVS_KEY_AIRPLAY_MODEL "ap_model"
 
 #define MAX_WIFI_SSID_LEN     32
 #define MAX_WIFI_PASSWORD_LEN 64
 #define MAX_DEVICE_NAME_LEN   64
+#define MAX_AIRPLAY_MODEL_LEN 32
 
 // Cached values  (defaults = 50 %)
 static float g_volume_db = -15.0f;
@@ -306,6 +308,53 @@ esp_err_t settings_set_device_name(const char *name) {
     ESP_LOGE(TAG, "Failed to save device name: %s", esp_err_to_name(err));
   }
 
+  return err;
+}
+
+esp_err_t settings_get_airplay_model(char *model, size_t len) {
+  if (!model || len == 0) {
+    return ESP_ERR_INVALID_ARG;
+  }
+
+  nvs_handle_t nvs;
+  esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs);
+  if (err == ESP_OK) {
+    size_t required_size = len;
+    err = nvs_get_str(nvs, NVS_KEY_AIRPLAY_MODEL, model, &required_size);
+    nvs_close(nvs);
+    if (err == ESP_OK && required_size <= len) {
+      return ESP_OK;
+    }
+  }
+
+  strncpy(model, SETTINGS_DEFAULT_AIRPLAY_MODEL, len - 1);
+  model[len - 1] = '\0';
+  return ESP_OK;
+}
+
+esp_err_t settings_set_airplay_model(const char *model) {
+  if (!model || strlen(model) == 0 || strlen(model) > MAX_AIRPLAY_MODEL_LEN) {
+    return ESP_ERR_INVALID_ARG;
+  }
+
+  nvs_handle_t nvs;
+  esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to open NVS: %s", esp_err_to_name(err));
+    return err;
+  }
+
+  err = nvs_set_str(nvs, NVS_KEY_AIRPLAY_MODEL, model);
+  if (err == ESP_OK) {
+    err = nvs_commit(nvs);
+  }
+  nvs_close(nvs);
+
+  if (err == ESP_OK) {
+    ESP_LOGI(TAG, "Saved AirPlay model: %s", model);
+  } else {
+    ESP_LOGE(TAG, "Failed to save AirPlay model: %s", esp_err_to_name(err));
+  }
   return err;
 }
 

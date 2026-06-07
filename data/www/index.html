@@ -58,7 +58,18 @@ input:focus{outline:none;border-color:#e94560}
 <div class='card'><h2>Device Settings</h2>
 <div class='form-group'><label>AirPlay Device Name</label><input type='text' id='dev-name' placeholder='My Speaker'></div>
 <button class='btn btn-primary' onclick='saveName()'>Save Name</button>
-<div id='name-msg'></div></div>
+<div id='name-msg'></div>
+<div class='form-group'><label>Apple Device Icon</label>
+<select id='dev-model'>
+<option value='AudioAccessory5,1'>HomePod mini</option>
+<option value='AudioAccessory1,1'>HomePod</option>
+<option value='AppleTV6,2'>Apple TV</option>
+<option value='AirPort4,107'>AirPort Express</option>
+<option value='Speaker1,1'>Generic speaker</option>
+</select></div>
+<button class='btn btn-primary' onclick='saveModel()'>Save Icon</button>
+<div id='model-msg'></div>
+<small style='opacity:.7'>Icon Apple shows for this device. Cosmetic only — iOS may revert "HomePod" to a speaker on connect. Applies after reboot.</small></div>
 <div class='card'><h2>Firmware Update</h2>
 <div class='file-row'><input type='file' id='fw-file' accept='.bin' style='display:none'>
 <button class='btn btn-secondary' onclick='document.getElementById("fw-file").click()'>Choose File</button>
@@ -113,6 +124,17 @@ async function saveName(){
   try{var r=await fetch('/api/device/name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
     var d=await r.json();if(d.success){msg('name-msg','Saved! Restart to apply.','ok');loadInfo();}else{msg('name-msg',d.error,'err');}}
   catch(e){msg('name-msg','Error','err');}}
+async function loadModel(){
+  try{var r=await fetch('/api/device/model');var d=await r.json();
+    if(d.model){document.getElementById('dev-model').value=d.model;}}catch(e){}}
+async function saveModel(){
+  var m=document.getElementById('dev-model').value;
+  try{var r=await fetch('/api/device/model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:m})});
+    var d=await r.json();
+    if(d.success){msg('model-msg','Saved. Reboot to apply.','ok');
+      if(confirm('Reboot now to apply the new icon?')){restart();}}
+    else{msg('model-msg',d.error||'Error','err');}}
+  catch(e){msg('model-msg','Error','err');}}
 async function startOTA(){
   var f=document.getElementById('fw-file').files[0];if(!f){msg('ota-msg','Select a file','err');return;}
   document.getElementById('ota-btn').disabled=true;msg('ota-msg','Uploading...','info');
@@ -144,5 +166,5 @@ window.onload=function(){
   document.getElementById('fw-file').onchange=function(e){var f=e.target.files[0];
     document.getElementById('fw-name').textContent=f?f.name:'No file selected';
     document.getElementById('ota-btn').disabled=!f;};
-  loadInfo();setInterval(loadInfo,30000);};
+  loadInfo();loadModel();setInterval(loadInfo,30000);};
 </script></body></html>

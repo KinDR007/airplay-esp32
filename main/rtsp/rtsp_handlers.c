@@ -480,9 +480,11 @@ static void handle_get(int socket, rtsp_conn_t *conn, const rtsp_request_t *req,
     plist_begin(&p);
     plist_dict_begin(&p);
 
+    char ap_model[33];
+    settings_get_airplay_model(ap_model, sizeof(ap_model));
     plist_dict_string(&p, "deviceid", device_id);
     plist_dict_uint(&p, "features", features);
-    plist_dict_string(&p, "model", "AudioAccessory5,1");
+    plist_dict_string(&p, "model", ap_model);
     plist_dict_string(&p, "protovers", "1.1");
     plist_dict_string(&p, "srcvers", "377.40.00");
 #ifdef CONFIG_AIRPLAY_FORCE_V1

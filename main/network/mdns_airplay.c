@@ -25,9 +25,9 @@ static const char *TAG = "mdns_airplay";
 // Flags: 0x4 = audio receiver
 #define AIRPLAY_FLAGS "0x4"
 
-// Model identifier - AudioAccessory for speaker appearance
-// AppleTV3,2 = Apple TV, AudioAccessory5,1 = HomePod mini (speaker)
-#define AIRPLAY_MODEL "AudioAccessory5,1"
+// Model identifier — controls the icon Apple shows (AudioAccessory5,1 = HomePod
+// mini, AppleTV6,2 = Apple TV, AirPort4,107 = AirPort Express, anything else =
+// generic speaker). User-selectable; read from settings at init.
 
 void mdns_airplay_init(void) {
   char mac_str[18];
@@ -36,9 +36,11 @@ void mdns_airplay_init(void) {
   char service_name[80];
   char pk_str[65]; // 32 bytes = 64 hex chars + null
   char device_name[65];
+  char airplay_model[33];
 
-  // Get device name from settings
+  // Get device name + AirPlay model (icon) from settings
   settings_get_device_name(device_name, sizeof(device_name));
+  settings_get_airplay_model(airplay_model, sizeof(airplay_model));
 
   // Get MAC address
   wifi_get_mac_str(mac_str, sizeof(mac_str));
@@ -75,7 +77,7 @@ void mdns_airplay_init(void) {
       {"deviceid", device_id},
       {"features", features_str},
       {"flags", AIRPLAY_FLAGS},
-      {"model", AIRPLAY_MODEL},
+      {"model", airplay_model},
       {"pk", pk_str},
       {"pi", "00000000-0000-0000-0000-000000000000"}, // Pairing identity UUID
       {"srcvers", AIRPLAY_SOURCE_VERSION},
@@ -101,7 +103,7 @@ void mdns_airplay_init(void) {
   // AirPlay v1 (classic RAOP): match squeezelite-esp32 txt record format.
   // No features, no pk, no HAP pairing — just classic RAOP fields.
   mdns_txt_item_t raop_txt[] = {
-      {"am", AIRPLAY_MODEL}, {"tp", "UDP"}, // Transport protocol
+      {"am", airplay_model}, {"tp", "UDP"}, // Transport protocol
       {"sm", "false"},                      // Sharing mode
       {"sv", "false"},                      // Server version (unused)
       {"ek", "1"},                          // Encryption key available
@@ -116,7 +118,7 @@ void mdns_airplay_init(void) {
   };
 #else
   mdns_txt_item_t raop_txt[] = {
-      {"am", AIRPLAY_MODEL},
+      {"am", airplay_model},
       {"cn", "0,1,2,3"},     // Audio codecs: PCM, ALAC, AAC, AAC-ELD
       {"da", "true"},        // Digest auth
       {"et", "0,3,5"},       // Encryption types
