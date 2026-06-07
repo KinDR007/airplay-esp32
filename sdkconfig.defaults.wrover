@@ -14,6 +14,10 @@ CONFIG_HEAP_POISONING_COMPREHENSIVE=y
 CONFIG_I2S_BCK_IO=33
 CONFIG_I2S_WS_IO=25
 CONFIG_I2S_DO_IO=32
+# PCM5102A soft-mute (XSMT) on GPIO26 — wire XSMT here instead of 3V3. Firmware
+# mutes the DAC while idle / on pause / disconnect (click-free), killing the
+# line-out hiss into the amp.
+CONFIG_DAC_SOFT_MUTE_GPIO=26
 CONFIG_DAC_I2C_SDA=-1
 CONFIG_DAC_I2C_SCL=-1
 CONFIG_SPDIF_DO_IO=-1
@@ -48,3 +52,8 @@ CONFIG_BTN_PLAY_PAUSE_GPIO=0
 # classic ESP32 (Xtensa LX6) 14.2 toolchain. Disable on this classic target;
 # use an S3/P4 build for Spotify.
 CONFIG_SPOTIFY_CONNECT_ENABLE=n
+
+# Now-playing web UI (/nowplaying + REST API + artwork). Try to fit it in the
+# 4 MB layout; if the app overflows the OTA slot the build switches to the
+# single-app 4 MB partition (see platformio.ini esp32wrover-dev).
+CONFIG_NOWPLAYING_UI_ENABLE=y
